@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>星载增量包地面复原校验</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #181f2e; --line: #2a3550;
+    --fg: #e6ecf7; --muted: #93a0b8; --ok: #3ddc84;
+    --bad: #ff5c6c; --accent: #5aa2ff; --warn: #ffc857;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.6 "Segoe UI", "PingFang SC", "Microsoft YaHei", monospace;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 22px; font-size: 13px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 18px; margin-bottom: 18px;
+  }
+  label { display: block; color: var(--muted); margin: 10px 0 4px; font-size: 12px; }
+  textarea {
+    width: 100%; height: 150px; resize: vertical; background: #0c111c;
+    color: var(--fg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; font-family: monospace; font-size: 12px;
+  }
+  input[type=text] {
+    width: 220px; background: #0c111c; color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px;
+    font-family: monospace;
+  }
+  button {
+    margin-top: 14px; background: var(--accent); color: #08111f;
+    border: 0; border-radius: 6px; padding: 9px 22px; font-weight: 700;
+    cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: wait; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .banner {
+    border-radius: 8px; padding: 12px 14px; margin-bottom: 16px;
+    border: 1px solid; display: none;
+  }
+  .banner.ok  { display: block; border-color: var(--ok); color: var(--ok); background: #12251a; }
+  .banner.bad { display: block; border-color: var(--bad); color: var(--bad); background: #2a1418; }
+  .banner .off { color: var(--fg); font-weight: 700; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px,1fr)); gap: 12px; }
+  .kv {
+    background: #0c111c; border: 1px solid var(--line);
+    border-radius: 8px; padding: 10px 12px;
+  }
+  .kv .k { color: var(--muted); font-size: 11px; }
+  .kv .v { font-size: 15px; word-break: break-all; }
+  h2 { font-size: 15px; margin: 22px 0 10px; color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #1f283c; color: var(--muted); font-weight: 600; }
+  td code, .mono { font-family: monospace; }
+  .tag { display: inline-block; border-radius: 4px; padding: 0 7px; font-size: 11px; }
+  .tag.blob { background: #143a26; color: var(--ok); }
+  .tag.delta { background: #1d2c4d; color: var(--accent); }
+  .ops { font-family: monospace; font-size: 12px; color: var(--muted); }
+  .copy { color: #8fd0ff; }
+  .insert { color: var(--warn); }
+  .arrow { color: var(--muted); }
+  .hidden { display: none; }
+  .errdetail { color: var(--muted); margin-top: 6px; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>星载增量包地面复原校验</h1>
+  <div class="sub">
+    仅接受 <code>blob</code>、<code>OFS_DELTA</code> 及以 blob 为根的嵌套 OFS_DELTA。
+    服务会核对 Pack 头、对象计数、覆盖正文的尾部 SHA-1，并逐层验证差分复制/插入证据。
+  </div>
+
+  <div class="panel">
+    <label for="b64">Base64 编码的 Git Pack v2（≤ 256 KiB）</label>
+    <textarea id="b64" placeholder="在此粘贴完整 Pack 文件的 Base64 文本……"></textarea>
+    <div class="hint">允许空白与换行；解码后必须为完整 Pack（含 12 字节头与 20 字节尾部 SHA-1）。</div>
+    <label for="offset">目标对象偏移（十进制，或 0x 十六进制）</label>
+    <input id="offset" type="text" placeholder="例如 12 或 0xc" value="12">
+    <div>
+      <button id="go">提交校验</button>
+    </div>
+  </div>
+
+  <div id="banner" class="banner"></div>
+
+  <div id="result" class="hidden">
+    <div class="panel">
+      <div class="grid">
+        <div class="kv"><div class="k">目标对象类型</div><div class="v" id="r-type"></div></div>
+        <div class="kv"><div class="k">解压（复原）长度</div><div class="v" id="r-length"></div></div>
+        <div class="kv"><div class="k">规范对象 SHA-1</div><div class="v" id="r-sha1"></div></div>
+        <div class="kv"><div class="k">包内对象计数</div><div class="v" id="r-count"></div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>完整基对象偏移链</h2>
+      <table>
+        <thead><tr>
+          <th>#</th><th>对象起点</th><th>类型</th><th>头声明长度</th>
+          <th>解压长度</th><th>zlib 流区间</th><th>OFS 基偏移</th>
+        </tr></thead>
+        <tbody id="chain-body"></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>每层差分复制与插入证据</h2>
+      <div id="layers"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function setBanner(kind, html) {
+  const b = $("banner");
+  b.className = "banner " + kind;
+  b.innerHTML = html;
+}
+function clearEvidence() {
+  $("result").classList.add("hidden");
+  $("chain-body").innerHTML = "";
+  $("layers").innerHTML = "";
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+
+function renderChain(chain) {
+  const body = $("chain-body");
+  body.innerHTML = chain.map((r, i) => {
+    const isDelta = r.type === "ofs_delta";
+    const tag = isDelta
+      ? '<span class="tag delta">OFS_DELTA</span>'
+      : '<span class="tag blob">blob</span>';
+    const ofs = isDelta
+      ? `<code>${r.base_offset}</code>（负偏移 ${r.ofs_negative}）`
+      : '<span class="arrow">— 根对象 —</span>';
+    return `<tr>
+      <td>${i}</td>
+      <td><code>${r.offset}</code> (0x${r.offset.toString(16)})</td>
+      <td>${tag}</td>
+      <td>${r.declared_size}</td>
+      <td>${r.inflated_size}</td>
+      <td><code>[${r.data_start}, ${r.stream_end})</code></td>
+      <td>${ofs}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderLayers(layers) {
+  const box = $("layers");
+  if (!layers.length) {
+    box.innerHTML = '<div class="ops">目标为根 blob，无差分层。</div>';
+    return;
+  }
+  box.innerHTML = layers.map((L) => {
+    const sizeOk = L.declared_source_size === L.actual_source_size &&
+                   L.declared_target_size === L.actual_target_size;
+    const copyRows = L.copies.map((c) =>
+      `<tr><td><span class="copy">COPY</span></td>
+       <td>${c.src}</td><td>${c.len}</td><td>${c.dst}</td>
+       <td><code>base[${c.src}:${c.src + c.len}]</code></td></tr>`).join("");
+    const insRows = L.inserts.map((n) =>
+      `<tr><td><span class="insert">INSERT</span></td>
+       <td>—</td><td>${n.len}</td><td>${n.dst}</td>
+       <td><code>0x${n.data_hex.slice(0, 64)}${n.data_hex.length > 64 ? "…" : ""}</code></td></tr>`).join("");
+    return `
+      <h2 style="color:var(--fg)">第 ${L.layer} 层（delta@${L.delta_offset} → base@${L.base_offset}）</h2>
+      <div class="errdetail" style="margin-bottom:8px">
+        源长度 声明 <b>${L.declared_source_size}</b> / 实际 <b>${L.actual_source_size}</b>；
+        目标长度 声明 <b>${L.declared_target_size}</b> / 实际 <b>${L.actual_target_size}</b>
+        ${sizeOk ? "✅ 一致" : "❌ 不一致"}
+        <br>长度字段包内偏移：source @${L.source_size_field}，target @${L.target_size_field}
+      </div>
+      <table>
+        <thead><tr><th>操作</th><th>源偏移 src</th><th>长度 len</th><th>目标位置 dst</th><th>证据</th></tr></thead>
+        <tbody>${copyRows}${insRows}</tbody>
+      </table>`;
+  }).join("");
+}
+
+async function submit() {
+  const btn = $("go");
+  btn.disabled = true;
+  clearEvidence();
+  setBanner("", "");
+  document.getElementById("banner").className = "banner";
+  try {
+    const resp = await fetch("/api/verify", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        pack_base64: $("b64").value,
+        offset: $("offset").value.trim()
+      })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      setBanner("ok", `✅ 校验通过：目标对象可由包内前序对象完整复原，尾部 SHA-1 核对一致。`);
+      $("r-type").textContent = data.type;
+      $("r-length").textContent = data.length + " 字节";
+      $("r-sha1").textContent = data.sha1;
+      $("r-count").textContent = data.object_count + " / 包长 " + data.pack_size;
+      renderChain(data.chain);
+      renderLayers(data.layers);
+      $("result").classList.remove("hidden");
+    } else {
+      const e = data.error || {};
+      const off = (e.offset === undefined || e.offset === null)
+        ? "" : `首个失败字节偏移：<span class="off">${e.offset} (0x${Number(e.offset).toString(16)})</span>`;
+      let detail = "";
+      if (e.detail) detail = `<div class="errdetail"><code>${esc(JSON.stringify(e.detail))}</code></div>`;
+      setBanner("bad", `❌ ${esc(e.message || "校验失败")} <code>[${esc(e.code || "ERROR")}]</code><br>${off}${detail}`);
+      clearEvidence();
+    }
+  } catch (err) {
+    setBanner("bad", `❌ 请求失败：${esc(err.message)}（请确认服务可用）`);
+    clearEvidence();
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$("go").addEventListener("click", submit);
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+# 星载增量包地面复原校验 Compose 环境
+#
+# 宿主机端口可配置：HOST_PORT=9090 docker compose up --build
+services:
+  verifier:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    image: pack-verifier:latest
+    ports:
+      # 宿主机端口默认 8080，可用 HOST_PORT 覆盖
+      - "${HOST_PORT:-8080}:8080"
+    environment:
+      - PORT=8080
+      - HOST=0.0.0.0
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import json,urllib.request,sys; r=urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3); sys.exit(0 if json.load(r).get('status')=='ok' else 1)"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 2s
+
+  verify:
+    build:
+      context: .
+      dockerfile: verify/Dockerfile
+    environment:
+      - TARGET_URL=http://verifier:8080
+    depends_on:
+      verifier:
+        conditions:
+          - service_healthy
+    restart: "no"

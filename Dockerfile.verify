@@ -1,0 +1,23 @@
+# 验收容器：执行构建检查、解码规则测试（含真实 git pack 交叉校验）
+# 与针对 compose web 服务的 HTTP 冒烟；以退出码报告验收结果。
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+
+# 单元测试中的真实 pack 交叉校验需要 git。
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY app.py ./
+COPY packv/ ./packv/
+COPY static/ ./static/
+COPY tests/ ./tests/
+COPY scripts/ ./scripts/
+
+# 针对 compose 网络内 web 服务；由 BASE_URL 指定。
+ENV BASE_URL=http://web:8080
+
+CMD ["python", "scripts/verify.py"]

@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pack v2 OFS_DELTA 归档复原校验</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Git Pack v2 · 目标数据块复原校验</h1>
+    <p class="sub">
+      仅接受 <code>blob</code>、<code>OFS_DELTA</code> 及以它们为基的嵌套
+      <code>OFS_DELTA</code>；先核对包头、对象计数与覆盖正文的尾部 SHA-1，
+      再逐层精确定位 zlib 流并复现每条复制 / 插入指令。
+    </p>
+  </header>
+
+  <main>
+    <section class="card">
+      <form id="verify-form">
+        <label for="pack-b64">增量包（Base64 编码的 Pack v2，解码后 ≤ 256 KiB）</label>
+        <textarea id="pack-b64" name="pack_base64" rows="8" spellcheck="false"
+          placeholder="在此粘贴 Base64…"></textarea>
+        <div class="row">
+          <div class="field">
+            <label for="offset">目标对象偏移（字节，十进制）</label>
+            <input id="offset" name="offset" type="number" min="0" step="1"
+              inputmode="numeric" placeholder="例如 178" required />
+          </div>
+          <div class="field grow">
+            <label>&nbsp;</label>
+            <button type="submit" id="submit-btn">提交校验</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section id="error-panel" class="card error hidden" hidden>
+      <h2>校验失败</h2>
+      <p id="error-msg" class="error-msg"></p>
+      <p id="error-offset" class="error-off"></p>
+    </section>
+
+    <section id="busy-panel" class="card hidden" hidden>
+      <p>正在请求校验 API…</p>
+    </section>
+
+    <section id="result-panel" class="card hidden" hidden>
+      <h2>结论：目标对象复原成功</h2>
+
+      <div class="grid">
+        <div><span class="k">对象类型</span><span id="r-type" class="v mono"></span></div>
+        <div><span class="k">目标偏移</span><span id="r-offset" class="v mono"></span></div>
+        <div><span class="k">解压长度</span><span id="r-length" class="v mono"></span></div>
+        <div><span class="k">规范对象 SHA-1</span><span id="r-sha1" class="v mono break"></span></div>
+        <div><span class="k">包内对象计数</span><span id="r-count" class="v mono"></span></div>
+        <div><span class="k">包大小 / 正文 SHA-1</span>
+          <span class="v"><span id="r-packs" class="mono"></span><br /><span id="r-packsha" class="mono break"></span></span>
+        </div>
+      </div>
+
+      <h3>完整基对象偏移链（根 → 目标）</h3>
+      <div id="r-chain" class="chain mono"></div>
+
+      <h3>根 blob</h3>
+      <div id="r-root" class="mono small"></div>
+
+      <h3>各层差分证据</h3>
+      <div id="r-layers"></div>
+    </section>
+  </main>
+
+  <footer>packv · 结论来自真实 <code>POST /api/verify</code></footer>
+  <script src="/app.js"></script>
+</body>
+</html>
